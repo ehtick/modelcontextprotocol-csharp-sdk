@@ -46,7 +46,6 @@ internal static class Program
                 Logging = ConfigureLogging(),
                 Completions = ConfigureCompletions(),
             },
-            ProtocolVersion = "2024-11-05",
             ServerInstructions = "This is a test server with only stub functionality",
         };
 
@@ -135,6 +134,16 @@ internal static class Program
                         },
                         new Tool()
                         {
+                            Name = "echoSessionId",
+                            Description = "Echoes the session id back to the client.",
+                            InputSchema = JsonSerializer.Deserialize<JsonElement>("""
+                                {
+                                    "type": "object"
+                                }
+                                """, McpJsonUtilities.DefaultOptions),
+                        },
+                        new Tool()
+                        {
                             Name = "sampleLLM",
                             Description = "Samples from an LLM using MCP's sampling feature.",
                             InputSchema = JsonSerializer.Deserialize<JsonElement>("""
@@ -171,6 +180,13 @@ internal static class Program
                         Content = [new Content() { Text = "Echo: " + message.ToString(), Type = "text" }]
                     };
                 }
+                else if (request.Params?.Name == "echoSessionId")
+                {
+                    return new CallToolResponse()
+                    {
+                        Content = [new Content() { Text = request.Server.SessionId, Type = "text" }]
+                    };
+                }
                 else if (request.Params?.Name == "sampleLLM")
                 {
                     if (request.Params?.Arguments is null ||
@@ -179,7 +195,7 @@ internal static class Program
                     {
                         throw new McpException("Missing required arguments 'prompt' and 'maxTokens'", McpErrorCode.InvalidParams);
                     }
-                    var sampleResult = await request.Server.RequestSamplingAsync(CreateRequestSamplingParams(prompt.ToString(), "sampleLLM", Convert.ToInt32(maxTokens.GetRawText())),
+                    var sampleResult = await request.Server.SampleAsync(CreateRequestSamplingParams(prompt.ToString(), "sampleLLM", Convert.ToInt32(maxTokens.GetRawText())),
                         cancellationToken);
 
                     return new CallToolResponse()

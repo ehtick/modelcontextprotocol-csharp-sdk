@@ -28,9 +28,6 @@ internal sealed class StreamableHttpHandler(
 {
     private static readonly JsonTypeInfo<JsonRpcError> s_errorTypeInfo = GetRequiredJsonTypeInfo<JsonRpcError>();
 
-    private static readonly MediaTypeHeaderValue s_applicationJsonMediaType = new("application/json");
-    private static readonly MediaTypeHeaderValue s_textEventStreamMediaType = new("text/event-stream");
-
     public ConcurrentDictionary<string, HttpMcpSession<StreamableHttpServerTransport>> Sessions { get; } = new(StringComparer.Ordinal);
 
     public HttpServerTransportOptions HttpServerTransportOptions => httpServerTransportOptions.Value;
@@ -43,8 +40,8 @@ internal sealed class StreamableHttpHandler(
         // ASP.NET Core Minimal APIs mostly try to stay out of the business of response content negotiation,
         // so we have to do this manually. The spec doesn't mandate that servers MUST reject these requests,
         // but it's probably good to at least start out trying to be strict.
-        var acceptHeaders = context.Request.GetTypedHeaders().Accept;
-        if (!acceptHeaders.Contains(s_applicationJsonMediaType) || !acceptHeaders.Contains(s_textEventStreamMediaType))
+        var typedHeaders = context.Request.GetTypedHeaders();
+        if (!typedHeaders.Accept.Any(MatchesApplicationJsonMediaType) || !typedHeaders.Accept.Any(MatchesTextEventStreamMediaType))
         {
             await WriteJsonRpcErrorAsync(context,
                 "Not Acceptable: Client must accept both application/json and text/event-stream",
@@ -85,8 +82,7 @@ internal sealed class StreamableHttpHandler(
 
     public async Task HandleGetRequestAsync(HttpContext context)
     {
-        var acceptHeaders = context.Request.GetTypedHeaders().Accept;
-        if (!acceptHeaders.Contains(s_textEventStreamMediaType))
+        if (!context.Request.GetTypedHeaders().Accept.Any(MatchesTextEventStreamMediaType))
         {
             await WriteJsonRpcErrorAsync(context,
                 "Not Acceptable: Client must accept text/event-stream",
@@ -139,6 +135,7 @@ internal sealed class StreamableHttpHandler(
             var transport = new StreamableHttpServerTransport
             {
                 Stateless = true,
+                SessionId = sessionId,
             };
             session = await CreateSessionAsync(context, transport, sessionId, statelessSessionId);
         }
@@ -187,7 +184,10 @@ internal sealed class StreamableHttpHandler(
         if (!HttpServerTransportOptions.Stateless)
         {
             sessionId = MakeNewSessionId();
-            transport = new();
+            transport = new()
+            {
+                SessionId = sessionId,
+            };
             context.Response.Headers["mcp-session-id"] = sessionId;
         }
         else
@@ -289,21 +289,19 @@ internal sealed class StreamableHttpHandler(
 
     private void ScheduleStatelessSessionIdWrite(HttpContext context, StreamableHttpServerTransport transport)
     {
-        context.Response.OnStarting(() =>
+        transport.OnInitRequestReceived = initRequestParams =>
         {
             var statelessId = new StatelessSessionId
             {
-                ClientInfo = transport?.InitializeRequest?.ClientInfo,
+                ClientInfo = initRequestParams?.ClientInfo,
                 UserIdClaim = GetUserIdClaim(context.User),
             };
 
             var sessionJson = JsonSerializer.Serialize(statelessId, StatelessSessionIdJsonContext.Default.StatelessSessionId);
-            var sessionId = Protector.Protect(sessionJson);
-
-            context.Response.Headers["mcp-session-id"] = sessionId;
-
-            return Task.CompletedTask;
-        });
+            transport.SessionId = Protector.Protect(sessionJson);
+            context.Response.Headers["mcp-session-id"] = transport.SessionId;
+            return ValueTask.CompletedTask;
+        };
     }
 
     internal static Task RunSessionAsync(HttpContext httpContext, IMcpServer session, CancellationToken requestAborted)
@@ -330,6 +328,12 @@ internal sealed class StreamableHttpHandler(
     }
 
     private static JsonTypeInfo<T> GetRequiredJsonTypeInfo<T>() => (JsonTypeInfo<T>)McpJsonUtilities.DefaultOptions.GetTypeInfo(typeof(T));
+
+    private static bool MatchesApplicationJsonMediaType(MediaTypeHeaderValue acceptHeaderValue)
+        => acceptHeaderValue.MatchesMediaType("application/json");
+
+    private static bool MatchesTextEventStreamMediaType(MediaTypeHeaderValue acceptHeaderValue)
+        => acceptHeaderValue.MatchesMediaType("text/event-stream");
 
     private sealed class HttpDuplexPipe(HttpContext context) : IDuplexPipe
     {
