@@ -105,7 +105,7 @@ public class StreamableHttpServerConformanceTests(ITestOutputHelper outputHelper
     [InlineData("text/event-stream")]
     [InlineData("application/json")]
     [InlineData("application/json-text/event-stream")]
-    public async Task PostRequest_IsNotAcceptable_WithSingleAcceptHeader(string singleAcceptValue)
+    public async Task PostRequest_IsNotAcceptable_WithSingleSpecificAcceptHeader(string singleAcceptValue)
     {
         await StartAsync();
 
@@ -114,6 +114,20 @@ public class StreamableHttpServerConformanceTests(ITestOutputHelper outputHelper
 
         using var response = await HttpClient.PostAsync("", JsonContent(InitializeRequest), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotAcceptable, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("*/*")]
+    [InlineData("text/event-stream, application/json;q=0.9")]
+    public async Task PostRequest_IsAcceptable_WithWildcardOrAddedQualityInAcceptHeader(string acceptHeaderValue)
+    {
+        await StartAsync();
+
+        HttpClient.DefaultRequestHeaders.Accept.Clear();
+        HttpClient.DefaultRequestHeaders.TryAddWithoutValidation(HeaderNames.Accept, acceptHeaderValue);
+
+        using var response = await HttpClient.PostAsync("", JsonContent(InitializeRequest), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
@@ -126,6 +140,22 @@ public class StreamableHttpServerConformanceTests(ITestOutputHelper outputHelper
 
         using var response = await HttpClient.GetAsync("", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotAcceptable, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("*/*")]
+    [InlineData("application/json, text/event-stream;q=0.9")]
+    public async Task GetRequest_IsAcceptable_WithWildcardOrAddedQualityInAcceptHeader(string acceptHeaderValue)
+    {
+        await StartAsync();
+
+        HttpClient.DefaultRequestHeaders.Accept.Clear();
+        HttpClient.DefaultRequestHeaders.TryAddWithoutValidation(HeaderNames.Accept, acceptHeaderValue);
+
+        await CallInitializeAndValidateAsync();
+
+        using var response = await HttpClient.GetAsync("", HttpCompletionOption.ResponseHeadersRead, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
@@ -188,9 +218,9 @@ public class StreamableHttpServerConformanceTests(ITestOutputHelper outputHelper
         var response = await HttpClient.PostAsync("", JsonContent(CallTool("throw")), TestContext.Current.CancellationToken);
         var rpcError = await AssertSingleSseResponseAsync(response);
 
-        var error = AssertType<CallToolResponse>(rpcError.Result);
+        var error = AssertType<CallToolResult>(rpcError.Result);
         var content = Assert.Single(error.Content);
-        Assert.Contains("'throw'", content.Text);
+        Assert.Contains("'throw'", Assert.IsType<TextContentBlock>(content).Text);
     }
 
     [Fact]
@@ -341,16 +371,15 @@ public class StreamableHttpServerConformanceTests(ITestOutputHelper outputHelper
             if (currentSseItem <= 10)
             {
                 var notification = JsonSerializer.Deserialize(sseEvent, GetJsonTypeInfo<JsonRpcNotification>());
-                var progressNotification = AssertType<ProgressNotification>(notification?.Params);
+                var progressNotification = AssertType<ProgressNotificationParams>(notification?.Params);
                 Assert.Equal($"Progress {currentSseItem - 1}", progressNotification.Progress.Message);
             }
             else
             {
                 var rpcResponse = JsonSerializer.Deserialize(sseEvent, GetJsonTypeInfo<JsonRpcResponse>());
-                var callToolResponse = AssertType<CallToolResponse>(rpcResponse?.Result);
+                var callToolResponse = AssertType<CallToolResult>(rpcResponse?.Result);
                 var callToolContent = Assert.Single(callToolResponse.Content);
-                Assert.Equal("text", callToolContent.Type);
-                Assert.Equal("done", callToolContent.Text);
+                Assert.Equal("done", Assert.IsType<TextContentBlock>(callToolContent).Text);
             }
         }
 
@@ -383,10 +412,9 @@ public class StreamableHttpServerConformanceTests(ITestOutputHelper outputHelper
         {
             var response = await HttpClient.PostAsync("", JsonContent(CallTool("async-local-session")), TestContext.Current.CancellationToken);
             var rpcResponse = await AssertSingleSseResponseAsync(response);
-            var callToolResponse = AssertType<CallToolResponse>(rpcResponse.Result);
+            var callToolResponse = AssertType<CallToolResult>(rpcResponse.Result);
             var callToolContent = Assert.Single(callToolResponse.Content);
-            Assert.Equal("text", callToolContent.Type);
-            Assert.Equal($"RunSessionHandler ({expectedSessionIndex})", callToolContent.Text);
+            Assert.Equal($"RunSessionHandler ({expectedSessionIndex})", Assert.IsType<TextContentBlock>(callToolContent).Text);
         }
 
         await CallAsyncLocalToolAndValidateAsync(expectedSessionIndex: 0);
@@ -497,7 +525,7 @@ public class StreamableHttpServerConformanceTests(ITestOutputHelper outputHelper
 
     private static T AssertType<T>(JsonNode? jsonNode)
     {
-        var type = JsonSerializer.Deserialize<T>(jsonNode, GetJsonTypeInfo<T>());
+        var type = JsonSerializer.Deserialize(jsonNode, GetJsonTypeInfo<T>());
         Assert.NotNull(type);
         return type;
     }
@@ -573,12 +601,11 @@ public class StreamableHttpServerConformanceTests(ITestOutputHelper outputHelper
         return initializeResult;
     }
 
-    private static CallToolResponse AssertEchoResponse(JsonRpcResponse rpcResponse)
+    private static CallToolResult AssertEchoResponse(JsonRpcResponse rpcResponse)
     {
-        var callToolResponse = AssertType<CallToolResponse>(rpcResponse.Result);
+        var callToolResponse = AssertType<CallToolResult>(rpcResponse.Result);
         var callToolContent = Assert.Single(callToolResponse.Content);
-        Assert.Equal("text", callToolContent.Type);
-        Assert.Equal($"Hello world! ({rpcResponse.Id})", callToolContent.Text);
+        Assert.Equal($"Hello world! ({rpcResponse.Id})", Assert.IsType<TextContentBlock>(callToolContent).Text);
         return callToolResponse;
     }
 

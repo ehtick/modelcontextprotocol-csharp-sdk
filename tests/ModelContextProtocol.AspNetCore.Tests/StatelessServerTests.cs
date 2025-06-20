@@ -18,7 +18,7 @@ public class StatelessServerTests(ITestOutputHelper outputHelper) : KestrelInMem
     {
         Endpoint = new Uri("http://localhost/"),
         Name = "In-memory Streamable HTTP Client",
-        UseStreamableHttp = true,
+        TransportMode = HttpTransportMode.StreamableHttp,
     };
 
     private async Task StartAsync()
@@ -113,7 +113,7 @@ public class StatelessServerTests(ITestOutputHelper outputHelper) : KestrelInMem
 
         var toolResponse = await client.CallToolAsync("testSamplingErrors", cancellationToken: TestContext.Current.CancellationToken);
         var toolContent = Assert.Single(toolResponse.Content);
-        Assert.Equal("Server to client requests are not supported in stateless mode.", toolContent.Text);
+        Assert.Equal("Server to client requests are not supported in stateless mode.", Assert.IsType<TextContentBlock>(toolContent).Text);
     }
 
     [Fact]
@@ -133,7 +133,27 @@ public class StatelessServerTests(ITestOutputHelper outputHelper) : KestrelInMem
 
         var toolResponse = await client.CallToolAsync("testRootsErrors", cancellationToken: TestContext.Current.CancellationToken);
         var toolContent = Assert.Single(toolResponse.Content);
-        Assert.Equal("Server to client requests are not supported in stateless mode.", toolContent.Text);
+        Assert.Equal("Server to client requests are not supported in stateless mode.", Assert.IsType<TextContentBlock>(toolContent).Text);
+    }
+
+    [Fact]
+    public async Task ElicitRequest_Fails_WithInvalidOperationException()
+    {
+        await StartAsync();
+
+        var mcpClientOptions = new McpClientOptions();
+        mcpClientOptions.Capabilities = new();
+        mcpClientOptions.Capabilities.Elicitation ??= new();
+        mcpClientOptions.Capabilities.Elicitation.ElicitationHandler = (_, _) =>
+        {
+            throw new UnreachableException();
+        };
+
+        await using var client = await ConnectMcpClientAsync(mcpClientOptions);
+
+        var toolResponse = await client.CallToolAsync("testElicitationErrors", cancellationToken: TestContext.Current.CancellationToken);
+        var toolContent = Assert.Single(toolResponse.Content);
+        Assert.Equal("Server to client requests are not supported in stateless mode.", Assert.IsType<TextContentBlock>(toolContent).Text);
     }
 
     [Fact]
@@ -170,7 +190,7 @@ public class StatelessServerTests(ITestOutputHelper outputHelper) : KestrelInMem
 
         var toolResponse = await client.CallToolAsync("testScope", cancellationToken: TestContext.Current.CancellationToken);
         var toolContent = Assert.Single(toolResponse.Content);
-        Assert.Equal("From request middleware!", toolContent.Text);
+        Assert.Equal("From request middleware!", Assert.IsType<TextContentBlock>(toolContent).Text);
     }
 
     [McpServerTool(Name = "testSamplingErrors")]
@@ -184,7 +204,7 @@ public class StatelessServerTests(ITestOutputHelper outputHelper) : KestrelInMem
         var asSamplingChatClientEx = Assert.Throws<InvalidOperationException>(() => server.AsSamplingChatClient());
         Assert.Equal(expectedSamplingErrorMessage, asSamplingChatClientEx.Message);
 
-        var requestSamplingEx = await Assert.ThrowsAsync<InvalidOperationException>(() => server.RequestSamplingAsync([]));
+        var requestSamplingEx = await Assert.ThrowsAsync<InvalidOperationException>(() => server.SampleAsync([]));
         Assert.Equal(expectedSamplingErrorMessage, requestSamplingEx.Message);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => server.SendRequestAsync(new JsonRpcRequest { Method = RequestMethods.SamplingCreateMessage }));
@@ -203,6 +223,21 @@ public class StatelessServerTests(ITestOutputHelper outputHelper) : KestrelInMem
         Assert.Equal(expectedRootsErrorMessage, requestRootsEx.Message);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => server.SendRequestAsync(new JsonRpcRequest { Method = RequestMethods.RootsList }));
+        return ex.Message;
+    }
+
+    [McpServerTool(Name = "testElicitationErrors")]
+    public static async Task<string> TestElicitationErrors(IMcpServer server)
+    {
+        const string expectedElicitationErrorMessage = "Elicitation is not supported in stateless mode.";
+
+        // Even when the client has elicitation support, it should not be advertised in stateless mode.
+        Assert.Null(server.ClientCapabilities);
+
+        var requestElicitationEx = Assert.Throws<InvalidOperationException>(() => server.ElicitAsync(new()));
+        Assert.Equal(expectedElicitationErrorMessage, requestElicitationEx.Message);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => server.SendRequestAsync(new JsonRpcRequest { Method = RequestMethods.ElicitationCreate }));
         return ex.Message;
     }
 

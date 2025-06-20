@@ -59,6 +59,22 @@ public partial class SseIntegrationTests(ITestOutputHelper outputHelper) : Kestr
     }
 
     [Fact]
+    public async Task ConnectAndReceiveMessage_ServerReturningJsonInPostRequest()
+    {
+        await using var app = Builder.Build();
+        MapAbsoluteEndpointUriMcp(app, respondInJson: true);
+
+        await app.StartAsync(TestContext.Current.CancellationToken);
+
+        await using var mcpClient = await ConnectMcpClientAsync();
+
+        // Send a test message through POST endpoint
+        await mcpClient.SendNotificationAsync("test/message", new Envelope { Message = "Hello, SSE!" }, serializerOptions: JsonContext.Default.Options, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(true);
+    }
+
+    [Fact]
     public async Task ConnectAndReceiveNotification_InMemoryServer()
     {
         var receivedNotification = new TaskCompletionSource<string?>();
@@ -143,7 +159,7 @@ public partial class SseIntegrationTests(ITestOutputHelper outputHelper) : Kestr
                 ["message"] = "from client!"
             },
             cancellationToken: TestContext.Current.CancellationToken);
-        var textContent = Assert.Single(echoResponse.Content, c => c.Type == "text");
+        var textContent = Assert.Single(echoResponse.Content.OfType<TextContentBlock>());
 
         Assert.Equal("hello from client!", textContent.Text);
     }
@@ -183,7 +199,7 @@ public partial class SseIntegrationTests(ITestOutputHelper outputHelper) : Kestr
         {
             Endpoint = new Uri("http://localhost/sse"),
             Name = "In-memory SSE Client",
-            AdditionalHeaders = new()
+            AdditionalHeaders = new Dictionary<string, string>
             {
                 ["Authorize"] = "Bearer testToken"
             },
@@ -210,7 +226,7 @@ public partial class SseIntegrationTests(ITestOutputHelper outputHelper) : Kestr
         {
             Endpoint = new Uri("http://localhost/sse"),
             Name = "In-memory SSE Client",
-            AdditionalHeaders = new()
+            AdditionalHeaders = new Dictionary<string, string>()
             {
                 [""] = ""
             },
@@ -220,7 +236,7 @@ public partial class SseIntegrationTests(ITestOutputHelper outputHelper) : Kestr
         Assert.Equal("Failed to add header '' with value '' from AdditionalHeaders.", ex.Message);
     }
 
-    private static void MapAbsoluteEndpointUriMcp(IEndpointRouteBuilder endpoints)
+    private static void MapAbsoluteEndpointUriMcp(IEndpointRouteBuilder endpoints, bool respondInJson = false)
     {
         var loggerFactory = endpoints.ServiceProvider.GetRequiredService<ILoggerFactory>();
         var optionsSnapshot = endpoints.ServiceProvider.GetRequiredService<IOptions<McpServerOptions>>();
@@ -267,7 +283,7 @@ public partial class SseIntegrationTests(ITestOutputHelper outputHelper) : Kestr
                 await Results.BadRequest("Session not started.").ExecuteAsync(context);
                 return;
             }
-            var message = (JsonRpcMessage?)await context.Request.ReadFromJsonAsync(McpJsonUtilities.DefaultOptions.GetTypeInfo(typeof(JsonRpcMessage)), context.RequestAborted);
+            var message = await context.Request.ReadFromJsonAsync<JsonRpcMessage>(McpJsonUtilities.DefaultOptions, context.RequestAborted);
             if (message is null)
             {
                 await Results.BadRequest("No message in request body.").ExecuteAsync(context);
@@ -276,7 +292,15 @@ public partial class SseIntegrationTests(ITestOutputHelper outputHelper) : Kestr
 
             await session.OnMessageReceivedAsync(message, context.RequestAborted);
             context.Response.StatusCode = StatusCodes.Status202Accepted;
-            await context.Response.WriteAsync("Accepted");
+
+            if (respondInJson)
+            {
+                await context.Response.WriteAsJsonAsync(message, McpJsonUtilities.DefaultOptions, cancellationToken: context.RequestAborted);
+            }
+            else
+            {
+                await context.Response.WriteAsync("Accepted");
+            }
         });
     }
 

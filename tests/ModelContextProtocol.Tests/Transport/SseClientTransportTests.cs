@@ -17,6 +17,7 @@ public class SseClientTransportTests : LoggedTest
             Endpoint = new Uri("http://localhost:8080"),
             ConnectionTimeout = TimeSpan.FromSeconds(2),
             Name = "Test Server",
+            TransportMode = HttpTransportMode.Sse,
             AdditionalHeaders = new Dictionary<string, string>
             {
                 ["test"] = "header"
@@ -115,7 +116,7 @@ public class SseClientTransportTests : LoggedTest
         };
 
         await using var session = await transport.ConnectAsync(TestContext.Current.CancellationToken);
-        await session.SendMessageAsync(new JsonRpcRequest() { Method = RequestMethods.Initialize, Id = new RequestId(44) }, CancellationToken.None);
+        await session.SendMessageAsync(new JsonRpcRequest { Method = RequestMethods.Initialize, Id = new RequestId(44) }, CancellationToken.None);
         Assert.True(true);
     }
 

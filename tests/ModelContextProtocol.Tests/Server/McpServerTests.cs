@@ -92,21 +92,21 @@ public class McpServerTests : LoggedTest
     }
 
     [Fact]
-    public async Task RequestSamplingAsync_Should_Throw_Exception_If_Client_Does_Not_Support_Sampling()
+    public async Task SampleAsync_Should_Throw_Exception_If_Client_Does_Not_Support_Sampling()
     {
         // Arrange
         await using var transport = new TestServerTransport();
         await using var server = McpServerFactory.Create(transport, _options, LoggerFactory);
         SetClientCapabilities(server, new ClientCapabilities());
 
-        var action = async () => await server.RequestSamplingAsync(new CreateMessageRequestParams { Messages = [] }, CancellationToken.None);
+        var action = async () => await server.SampleAsync(new CreateMessageRequestParams { Messages = [] }, CancellationToken.None);
 
         // Act & Assert
         await Assert.ThrowsAsync<InvalidOperationException>(action);
     }
 
     [Fact]
-    public async Task RequestSamplingAsync_Should_SendRequest()
+    public async Task SampleAsync_Should_SendRequest()
     {
         // Arrange
         await using var transport = new TestServerTransport();
@@ -116,7 +116,7 @@ public class McpServerTests : LoggedTest
         var runTask = server.RunAsync(TestContext.Current.CancellationToken);
 
         // Act
-        var result = await server.RequestSamplingAsync(new CreateMessageRequestParams { Messages = [] }, CancellationToken.None);
+        var result = await server.SampleAsync(new CreateMessageRequestParams { Messages = [] }, CancellationToken.None);
 
         Assert.NotNull(result);
         Assert.NotEmpty(transport.SentMessages);
@@ -156,6 +156,40 @@ public class McpServerTests : LoggedTest
         Assert.NotEmpty(transport.SentMessages);
         Assert.IsType<JsonRpcRequest>(transport.SentMessages[0]);
         Assert.Equal(RequestMethods.RootsList, ((JsonRpcRequest)transport.SentMessages[0]).Method);
+
+        await transport.DisposeAsync();
+        await runTask;
+    }
+
+    [Fact]
+    public async Task ElicitAsync_Should_Throw_Exception_If_Client_Does_Not_Support_Elicitation()
+    {
+        // Arrange
+        await using var transport = new TestServerTransport();
+        await using var server = McpServerFactory.Create(transport, _options, LoggerFactory);
+        SetClientCapabilities(server, new ClientCapabilities());
+
+        // Act & Assert
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await server.ElicitAsync(new ElicitRequestParams(), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ElicitAsync_Should_SendRequest()
+    {
+        // Arrange
+        await using var transport = new TestServerTransport();
+        await using var server = McpServerFactory.Create(transport, _options, LoggerFactory);
+        SetClientCapabilities(server, new ClientCapabilities { Elicitation = new ElicitationCapability() });
+        var runTask = server.RunAsync(TestContext.Current.CancellationToken);
+
+        // Act
+        var result = await server.ElicitAsync(new ElicitRequestParams(), CancellationToken.None);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.NotEmpty(transport.SentMessages);
+        Assert.IsType<JsonRpcRequest>(transport.SentMessages[0]);
+        Assert.Equal(RequestMethods.ElicitationCreate, ((JsonRpcRequest)transport.SentMessages[0]).Method);
 
         await transport.DisposeAsync();
         await runTask;
@@ -440,9 +474,9 @@ public class McpServerTests : LoggedTest
                 {
                     CallToolHandler = async (request, ct) =>
                     {
-                        return new CallToolResponse
+                        return new CallToolResult
                         {
-                            Content = [new Content { Text = "test" }]
+                            Content = [new TextContentBlock { Text = "test" }]
                         };
                     },
                     ListToolsHandler = (request, ct) => throw new NotImplementedException(),
@@ -452,10 +486,10 @@ public class McpServerTests : LoggedTest
             configureOptions: null,
             assertResult: response =>
             {
-                var result = JsonSerializer.Deserialize<CallToolResponse>(response, McpJsonUtilities.DefaultOptions);
+                var result = JsonSerializer.Deserialize<CallToolResult>(response, McpJsonUtilities.DefaultOptions);
                 Assert.NotNull(result);
                 Assert.NotEmpty(result.Content);
-                Assert.Equal("test", result.Content[0].Text);
+                Assert.Equal("test", Assert.IsType<TextContentBlock>(result.Content[0]).Text);
             });
     }
 
@@ -596,12 +630,12 @@ public class McpServerTests : LoggedTest
             Assert.Equal($"You are a helpful assistant.{Environment.NewLine}More system stuff.", rp.SystemPrompt);
 
             Assert.Equal(2, rp.Messages.Count);
-            Assert.Equal("I am going to France.", rp.Messages[0].Content.Text);
-            Assert.Equal("What is the most famous tower in Paris?", rp.Messages[1].Content.Text);
+            Assert.Equal("I am going to France.", Assert.IsType<TextContentBlock>(rp.Messages[0].Content).Text);
+            Assert.Equal("What is the most famous tower in Paris?", Assert.IsType<TextContentBlock>(rp.Messages[1].Content).Text);
 
             CreateMessageResult result = new()
             {
-                Content = new() { Text = "The Eiffel Tower.", Type = "text" },
+                Content = new TextContentBlock { Text = "The Eiffel Tower." },
                 Model = "amazingmodel",
                 Role = Role.Assistant,
                 StopReason = "endTurn",
@@ -616,6 +650,7 @@ public class McpServerTests : LoggedTest
 
         public ValueTask DisposeAsync() => default;
 
+        public string? SessionId => throw new NotImplementedException();
         public Implementation? ClientInfo => throw new NotImplementedException();
         public IServiceProvider? Services => throw new NotImplementedException();
         public LoggingLevel? LoggingLevel => throw new NotImplementedException();
@@ -650,7 +685,7 @@ public class McpServerTests : LoggedTest
         await transport.SendMessageAsync(new JsonRpcNotification
         {
             Method = NotificationMethods.ProgressNotification,
-            Params = JsonSerializer.SerializeToNode(new ProgressNotification
+            Params = JsonSerializer.SerializeToNode(new ProgressNotificationParams
             {
                 ProgressToken = new("abc"),
                 Progress = new()
@@ -663,7 +698,7 @@ public class McpServerTests : LoggedTest
         }, TestContext.Current.CancellationToken);
 
         var notification = await notificationReceived.Task;
-        var progress = JsonSerializer.Deserialize<ProgressNotification>(notification.Params, McpJsonUtilities.DefaultOptions);
+        var progress = JsonSerializer.Deserialize<ProgressNotificationParams>(notification.Params, McpJsonUtilities.DefaultOptions);
         Assert.NotNull(progress);
         Assert.Equal("abc", progress.ProgressToken.ToString());
         Assert.Equal(50, progress.Progress.Progress);
